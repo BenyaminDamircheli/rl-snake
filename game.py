@@ -114,10 +114,12 @@ class SnakeGame:
         
         # Process game events (allows for window closing)
         if self.render:
-            for event in pygame.event.get():
+            # Process only QUIT events, keep other events for main loop
+            for event in pygame.event.get(pygame.QUIT):
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     quit()
+            pygame.event.pump()
         
         # Move snake based on the action
         self._move(action)
@@ -210,21 +212,62 @@ class SnakeGame:
         
         pygame.display.flip()
     
+    def _draw_game_over(self):
+        """Draw the game over overlay."""
+        if not self.render:
+            return
+        
+        # Semi-transparent overlay
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180)) # Black with some transparency
+        self.display.blit(overlay, (0, 0))
+        
+        # Game Over Text
+        font = pygame.font.SysFont('arial', 50)
+        text = font.render("GAME OVER", True, (255, 0, 0)) # Red
+        text_rect = text.get_rect(center=(self.width / 2, self.height / 2 - 50))
+        self.display.blit(text, text_rect)
+        
+        # Final Score Text
+        font = pygame.font.SysFont('arial', 30)
+        score_text = font.render(f"Final Score: {self.score}", True, (255, 255, 255)) # White
+        score_rect = score_text.get_rect(center=(self.width / 2, self.height / 2))
+        self.display.blit(score_text, score_rect)
+
+        # Restart Text
+        font = pygame.font.SysFont('arial', 25)
+        restart_text = font.render("Press 'R' to Restart", True, (255, 255, 255)) # White
+        restart_rect = restart_text.get_rect(center=(self.width / 2, self.height / 2 + 50))
+        self.display.blit(restart_text, restart_rect)
+        
+        pygame.display.flip()
+    
     def _move(self, action):
         """
         Update the snake's direction and head position based on the action.
         
         Args:
-            action (int): 0 = RIGHT, 1 = DOWN, 2 = LEFT, 3 = UP
+            action (int): 0 = RIGHT, 1 = LEFT, 2 = UP, 3 = DOWN
         """
-        # Set direction directly based on action
-        if 0 <= action <= 3:
-            # Prevent 180-degree turns (snake can't turn back on itself)
-            current_dir_idx = self.snake_direction.value
-            if (action != (current_dir_idx + 2) % 4):
-                self.snake_direction = Direction(action)
+        # Map actions to Directions and define opposites
+        # Action: 0=RIGHT, 1=LEFT, 2=UP, 3=DOWN
+        directions = [Direction.RIGHT, Direction.LEFT, Direction.UP, Direction.DOWN]
+        opposites = { 
+            Direction.RIGHT: Direction.LEFT,
+            Direction.LEFT: Direction.RIGHT,
+            Direction.UP: Direction.DOWN,
+            Direction.DOWN: Direction.UP
+        }
         
-        # Update head position based on the direction
+        if 0 <= action <= 3:
+            new_direction = directions[action]
+            current_direction = self.snake_direction
+            
+            # Prevent 180-degree turns
+            if new_direction != opposites[current_direction]:
+                self.snake_direction = new_direction
+
+        # Update head position based on the potentially updated direction
         x, y = self.head
         if self.snake_direction == Direction.RIGHT:
             x += 1
@@ -286,8 +329,151 @@ class SnakeGame:
         
         return np.array(state, dtype=int)
 
+    def get_action_space(self):
+        """
+        Returns the action space information.
+        
+        Returns:
+            dict: Information about the action space
+        """
+        return {
+            'n': 4,  # Number of possible actions
+            'actions': {
+                0: 'RIGHT',
+                1: 'DOWN',
+                2: 'LEFT',
+                3: 'UP'
+            }
+        }
+    
+    def get_state_space(self):
+        """
+        Returns the state space information.
+        
+        Returns:
+            dict: Information about the state space
+        """
+        return {
+            'shape': (12,),  # 4 danger values + 4 direction values + 4 food direction values
+            'features': {
+                'danger': 'Binary values indicating danger in RIGHT, DOWN, LEFT, UP directions',
+                'direction': 'One-hot encoding of current direction (RIGHT, DOWN, LEFT, UP)',
+                'food_direction': 'Binary values indicating if food is in RIGHT, DOWN, LEFT, UP directions'
+            }
+        }
 
+class SnakeEnv:
+    """
+    A wrapper for the SnakeGameAI that follows the Gym-like interface.
+    This makes it easier to use with RL libraries.
+    """
+    def __init__(self, width=640, height=480, grid_size=20, render=True):
+        self.game = SnakeGame(width, height, grid_size, render)
+        self.action_space = self.game.get_action_space()
+        self.observation_space = self.game.get_state_space()
+    
+    def reset(self):
+        """
+        Reset the game and return the initial observation
+        """
+        return self.game.reset()
+    
+    def step(self, action):
+        """
+        Take a step in the game
+        
+        Args:
+            action (int): The action to take
+        
+        Returns:
+            tuple: (observation, reward, done, info)
+        """
+        return self.game.step(action)
+    
+    def render(self):
+        """
+        Render the game
+        """
+        if self.game.render:
+            self.game._update_ui()
+    
+    def close(self):
+        """
+        Close the game
+        """
+        if self.game.render:
+            pygame.quit()
+    
 
+# Example of usage
+def main():
+    human_mode = True  # Set to False for AI mode
+    game = SnakeGame(render=True)
+    
+    # Print information about the state and action spaces
+    print(f"Action Space: {game.get_action_space()}")
+    print(f"State Space: {game.get_state_space()}")
+    
+    # Game loop
+    done = False
+    while True:
+        # Handle quit and restart events
+        restart_game = False
+        action = None
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                return
+            elif event.type == pygame.KEYDOWN:
+                if done and event.key == pygame.K_r:
+                    restart_game = True
+                elif not done and human_mode:
+                    if event.key == pygame.K_a:
+                        action = 1
+                    elif event.key == pygame.K_d:
+                        action = 0
+                    elif event.key == pygame.K_w:
+                        action = 2
+                    elif event.key == pygame.K_s:
+                        action = 3
+        if restart_game:
+            game.reset()
+            done = False
+            continue
+
+        # Game logic
+        if not done:
+            state = game._get_state()
+            if human_mode:
+                if action is None:
+                    action = game.snake_direction.value
+            else:
+                action = random.randint(0, 3)
+
+            # Advance game
+            next_state, reward, done, info = game.step(action)
+            time.sleep(0.1)
+
+            if not human_mode:
+                print(f"State: {state}")
+                print(f"Action: {action}")
+                print(f"Reward: {reward}")
+                print(f"Score: {info['score']}")
+                time.sleep(1)
+
+            if done:
+                print(f"Game Over! Final Score: {info['score']}")
+        else:
+            # Draw game over and wait for restart
+            game._draw_game_over()
+            game.clock.tick(15)
+
+if __name__ == "__main__":
+    main()
+        
+    
+    
+    
 
 
         
